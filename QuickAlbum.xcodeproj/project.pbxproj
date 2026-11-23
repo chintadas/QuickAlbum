@@ -22,7 +22,6 @@
 		B0000000000000000000000D /* OrganizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000D /* OrganizerView.swift */; };
 		B0000000000000000000000E /* PhotoGridViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000E /* PhotoGridViewController.swift */; };
 		B0000000000000000000000F /* PhotoGridCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000F /* PhotoGridCell.swift */; };
-		B00000000000000000000010 /* DaySectionHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000010 /* DaySectionHeaderView.swift */; };
 		B00000000000000000000011 /* PhotoGridRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000011 /* PhotoGridRepresentable.swift */; };
 		B00000000000000000000012 /* AlbumTrayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000012 /* AlbumTrayView.swift */; };
 		B00000000000000000000013 /* AlbumTileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000013 /* AlbumTileView.swift */; };
@@ -66,7 +65,6 @@
 		F0000000000000000000000D /* OrganizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizerView.swift; sourceTree = "<group>"; };
 		F0000000000000000000000E /* PhotoGridViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGridViewController.swift; sourceTree = "<group>"; };
 		F0000000000000000000000F /* PhotoGridCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGridCell.swift; sourceTree = "<group>"; };
-		F00000000000000000000010 /* DaySectionHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaySectionHeaderView.swift; sourceTree = "<group>"; };
 		F00000000000000000000011 /* PhotoGridRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGridRepresentable.swift; sourceTree = "<group>"; };
 		F00000000000000000000012 /* AlbumTrayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumTrayView.swift; sourceTree = "<group>"; };
 		F00000000000000000000013 /* AlbumTileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumTileView.swift; sourceTree = "<group>"; };
@@ -165,7 +163,6 @@
 			children = (
 				F0000000000000000000000E /* PhotoGridViewController.swift */,
 				F0000000000000000000000F /* PhotoGridCell.swift */,
-				F00000000000000000000010 /* DaySectionHeaderView.swift */,
 				F00000000000000000000011 /* PhotoGridRepresentable.swift */,
 			);
 			path = Grid;
@@ -333,7 +330,6 @@
 				B0000000000000000000000D /* OrganizerView.swift in Sources */,
 				B0000000000000000000000E /* PhotoGridViewController.swift in Sources */,
 				B0000000000000000000000F /* PhotoGridCell.swift in Sources */,
-				B00000000000000000000010 /* DaySectionHeaderView.swift in Sources */,
 				B00000000000000000000011 /* PhotoGridRepresentable.swift in Sources */,
 				B00000000000000000000012 /* AlbumTrayView.swift in Sources */,
 				B00000000000000000000013 /* AlbumTileView.swift in Sources */,

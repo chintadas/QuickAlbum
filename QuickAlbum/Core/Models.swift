@@ -93,20 +93,6 @@ public struct PhotoItem: Identifiable, Hashable, Sendable {
     }
 }
 
-public struct DaySection: Identifiable, Equatable, Hashable, Sendable {
-    public let id: String
-    public let date: Date?
-    public let title: String
-    public let photoIDs: [String]
-
-    public init(id: String, date: Date?, title: String, photoIDs: [String]) {
-        self.id = id
-        self.date = date
-        self.title = title
-        self.photoIDs = photoIDs
-    }
-}
-
 public enum MembershipFilter: String, CaseIterable, Codable, Sendable {
     case all
     case noAlbum

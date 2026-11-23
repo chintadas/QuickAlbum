@@ -71,19 +71,15 @@ public final class OrganizerViewModel {
     private var albumSummariesByID: [String: AlbumSummary] = [:]
 
     public private(set) var unassignedPhotoCount: Int = 0
-    public private(set) var visibleSections: [DaySection] = []
     public private(set) var visiblePhotoItemsByID: [String: PhotoItem] = [:]
     public private(set) var flatVisiblePhotoIDs: [String] = []
     public private(set) var dataVersion: Int = 0
 
-    // MARK: - Internal Tasks & Formatters
+    // MARK: - Internal Tasks
 
     private var changesTask: Task<Void, Never>?
     private var pendingMutationTask: Task<Void, Never>?
     private var toastDismissTask: Task<Void, Never>?
-
-    private let dayKeyFormatter: DateFormatter
-    private let dayTitleFormatter: DateFormatter
 
     // MARK: - Initialization
 
@@ -108,20 +104,6 @@ public final class OrganizerViewModel {
         self.sortOrder = preferences.sortOrder
         self.hideScreenshots = preferences.hideScreenshots
         self.columnCount = preferences.columnCount
-
-        let keyFormatter = DateFormatter()
-        keyFormatter.calendar = calendar
-        keyFormatter.timeZone = calendar.timeZone
-        keyFormatter.locale = Locale(identifier: "en_US_POSIX")
-        keyFormatter.dateFormat = "yyyy-MM-dd"
-        self.dayKeyFormatter = keyFormatter
-
-        let titleFormatter = DateFormatter()
-        titleFormatter.calendar = calendar
-        titleFormatter.timeZone = calendar.timeZone
-        titleFormatter.dateStyle = .full
-        titleFormatter.timeStyle = .none
-        self.dayTitleFormatter = titleFormatter
     }
 
     // MARK: - Computed Properties
@@ -290,24 +272,6 @@ public final class OrganizerViewModel {
             selectedAssetIDs.insert(assetID)
         } else {
             selectedAssetIDs.remove(assetID)
-        }
-    }
-
-    public func isDayFullySelected(sectionID: String) -> Bool {
-        guard let section = visibleSections.first(where: { $0.id == sectionID }),
-              !section.photoIDs.isEmpty else {
-            return false
-        }
-        return section.photoIDs.allSatisfy { selectedAssetIDs.contains($0) }
-    }
-
-    public func toggleDaySelection(sectionID: String) {
-        guard let section = visibleSections.first(where: { $0.id == sectionID }) else { return }
-        let allSelected = !section.photoIDs.isEmpty && section.photoIDs.allSatisfy { selectedAssetIDs.contains($0) }
-        if allSelected {
-            selectedAssetIDs.subtract(section.photoIDs)
-        } else {
-            selectedAssetIDs.formUnion(section.photoIDs)
         }
     }
 
@@ -785,45 +749,8 @@ public final class OrganizerViewModel {
             itemsByID[item.id] = item
         }
 
-        var sections: [DaySection] = []
-        var flatIDs: [String] = []
-        flatIDs.reserveCapacity(filtered.count)
-
-        var currentSectionID: String?
-        var currentSectionDate: Date?
-        var currentPhotoIDs: [String] = []
-
-        func flushSection() {
-            guard let sectionID = currentSectionID else { return }
-            let title = formattedSectionTitle(for: currentSectionDate)
-            sections.append(
-                DaySection(
-                    id: sectionID,
-                    date: currentSectionDate,
-                    title: title,
-                    photoIDs: currentPhotoIDs
-                )
-            )
-            flatIDs.append(contentsOf: currentPhotoIDs)
-            currentPhotoIDs.removeAll(keepingCapacity: true)
-        }
-
-        for item in filtered {
-            let sectionDate = item.creationDate.map { calendar.startOfDay(for: $0) }
-            let sectionID = sectionDate.map { dayKeyFormatter.string(from: $0) } ?? "undated"
-
-            if sectionID != currentSectionID {
-                flushSection()
-                currentSectionID = sectionID
-                currentSectionDate = sectionDate
-            }
-            currentPhotoIDs.append(item.id)
-        }
-        flushSection()
-
         self.visiblePhotoItemsByID = itemsByID
-        self.visibleSections = sections
-        self.flatVisiblePhotoIDs = flatIDs
+        self.flatVisiblePhotoIDs = filtered.map(\.id)
         self.dataVersion += 1
     }
 
@@ -841,19 +768,6 @@ public final class OrganizerViewModel {
             pixelWidth: raw.pixelWidth,
             pixelHeight: raw.pixelHeight
         )
-    }
-
-    private func formattedSectionTitle(for dayDate: Date?) -> String {
-        guard let dayDate else { return "Undated" }
-        let now = nowProvider()
-        if calendar.isDate(dayDate, inSameDayAs: now) {
-            return "Today"
-        }
-        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
-           calendar.isDate(dayDate, inSameDayAs: yesterday) {
-            return "Yesterday"
-        }
-        return dayTitleFormatter.string(from: dayDate)
     }
 
     private func orderedSelectedAssetIDs() -> [String] {

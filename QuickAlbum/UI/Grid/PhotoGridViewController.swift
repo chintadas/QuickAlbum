@@ -8,11 +8,14 @@ final class PhotoGridViewController: UIViewController,
     UICollectionViewDataSourcePrefetching,
     UICollectionViewDragDelegate,
     UIGestureRecognizerDelegate {
+    private enum GridSection: Hashable {
+        case main
+    }
+
     // MARK: - Callbacks
 
     var onToggleSelection: ((String) -> Void)?
     var onSetSelection: ((String, Bool) -> Void)?
-    var onToggleDaySelection: ((String) -> Void)?
     var onOpenPreview: ((String) -> Void)?
     var onChangeColumnCount: ((Int) -> Void)?
     var onDragSessionChanged: ((Bool, [String]) -> Void)?
@@ -20,7 +23,6 @@ final class PhotoGridViewController: UIViewController,
 
     // MARK: - State
 
-    private var sections: [DaySection] = []
     private var photoItemsByID: [String: PhotoItem] = [:]
     private var flatPhotoIDs: [String] = []
     private var selectedIDs: Set<String> = []
@@ -33,7 +35,7 @@ final class PhotoGridViewController: UIViewController,
     // MARK: - UI & Data Source
 
     private var collectionView: UICollectionView!
-    private var dataSource: UICollectionViewDiffableDataSource<String, String>!
+    private var dataSource: UICollectionViewDiffableDataSource<GridSection, String>!
     private var lastTargetPixelSize: CGSize = CGSize(width: 220, height: 220)
 
     // MARK: - Gesture State
@@ -75,7 +77,6 @@ final class PhotoGridViewController: UIViewController,
     // MARK: - Public Update Entrypoint
 
     func applyState(
-        sections: [DaySection],
         photoItemsByID: [String: PhotoItem],
         flatPhotoIDs: [String],
         selectedIDs: Set<String>,
@@ -86,7 +87,6 @@ final class PhotoGridViewController: UIViewController,
         let previousSelected = self.selectedIDs
         let structureChanged = self.lastAppliedDataVersion != dataVersion
 
-        self.sections = sections
         self.photoItemsByID = photoItemsByID
         self.flatPhotoIDs = flatPhotoIDs
         self.selectedIDs = selectedIDs
@@ -103,11 +103,9 @@ final class PhotoGridViewController: UIViewController,
             self.lastAppliedDataVersion = dataVersion
             refreshPHAssetCache(for: flatPhotoIDs)
             applyDiffableSnapshot(animated: true)
-            refreshVisibleSectionHeaders()
         } else if previousSelected != selectedIDs {
             let changedIDs = previousSelected.symmetricDifference(selectedIDs)
             reconfigureVisibleCells(for: changedIDs)
-            refreshVisibleSectionHeaders()
         }
     }
 
@@ -119,15 +117,10 @@ final class PhotoGridViewController: UIViewController,
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         collectionView.backgroundColor = .systemBackground
         collectionView.alwaysBounceVertical = true
-        collectionView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 164, right: 0)
+        collectionView.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 164, right: 0)
         collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: 0, left: 0, bottom: 150, right: 0)
 
         collectionView.register(PhotoGridCell.self, forCellWithReuseIdentifier: PhotoGridCell.reuseIdentifier)
-        collectionView.register(
-            DaySectionHeaderView.self,
-            forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
-            withReuseIdentifier: DaySectionHeaderView.reuseIdentifier
-        )
 
         collectionView.delegate = self
         collectionView.prefetchDataSource = self
@@ -140,9 +133,12 @@ final class PhotoGridViewController: UIViewController,
         UICollectionViewCompositionalLayout { [weak self] _, _ in
             let cols = max(3, min(5, self?.columnCount ?? 4))
             let fraction = 1.0 / CGFloat(cols)
+            // `horizontal(layoutSize:repeatingSubitem:count:)` respects the item's widthDimension
+            // (unlike the deprecated `subitem:count:` API), so each item must be `1 / cols` wide
+            // to place `cols` square tiles per row instead of pushing columns 2..N off-screen.
             let itemSize = NSCollectionLayoutSize(
                 widthDimension: .fractionalWidth(fraction),
-                heightDimension: .fractionalWidth(fraction)
+                heightDimension: .fractionalHeight(1.0)
             )
             let item = NSCollectionLayoutItem(layoutSize: itemSize)
             item.contentInsets = NSDirectionalEdgeInsets(top: 1, leading: 1, bottom: 1, trailing: 1)
@@ -151,28 +147,20 @@ final class PhotoGridViewController: UIViewController,
                 widthDimension: .fractionalWidth(1.0),
                 heightDimension: .fractionalWidth(fraction)
             )
-            let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize, subitems: [item])
+            let group = NSCollectionLayoutGroup.horizontal(
+                layoutSize: groupSize,
+                repeatingSubitem: item,
+                count: cols
+            )
 
             let section = NSCollectionLayoutSection(group: group)
-            section.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 1, bottom: 8, trailing: 1)
-
-            let headerSize = NSCollectionLayoutSize(
-                widthDimension: .fractionalWidth(1.0),
-                heightDimension: .estimated(38)
-            )
-            let header = NSCollectionLayoutBoundarySupplementaryItem(
-                layoutSize: headerSize,
-                elementKind: UICollectionView.elementKindSectionHeader,
-                alignment: .top
-            )
-            header.pinToVisibleBounds = true
-            section.boundarySupplementaryItems = [header]
+            section.contentInsets = NSDirectionalEdgeInsets(top: 1, leading: 1, bottom: 8, trailing: 1)
             return section
         }
     }
 
     private func configureDataSource() {
-        dataSource = UICollectionViewDiffableDataSource<String, String>(
+        dataSource = UICollectionViewDiffableDataSource<GridSection, String>(
             collectionView: collectionView
         ) { [weak self] collectionView, indexPath, assetID in
             guard let self,
@@ -202,32 +190,6 @@ final class PhotoGridViewController: UIViewController,
             )
             return cell
         }
-
-        dataSource.supplementaryViewProvider = { [weak self] collectionView, kind, indexPath in
-            guard kind == UICollectionView.elementKindSectionHeader,
-                  let self,
-                  let header = collectionView.dequeueReusableSupplementaryView(
-                    ofKind: kind,
-                    withReuseIdentifier: DaySectionHeaderView.reuseIdentifier,
-                    for: indexPath
-                  ) as? DaySectionHeaderView else {
-                return UICollectionReusableView()
-            }
-
-            let sectionID = self.dataSource.snapshot().sectionIdentifiers[indexPath.section]
-            if let section = self.sections.first(where: { $0.id == sectionID }) {
-                let allSelected = !section.photoIDs.isEmpty && section.photoIDs.allSatisfy { self.selectedIDs.contains($0) }
-                header.configure(
-                    title: section.title,
-                    count: section.photoIDs.count,
-                    isFullySelected: allSelected,
-                    onToggleDay: { [weak self] in
-                        self?.onToggleDaySelection?(section.id)
-                    }
-                )
-            }
-            return header
-        }
     }
 
     private func configureGestures() {
@@ -248,11 +210,9 @@ final class PhotoGridViewController: UIViewController,
 
     private func applyDiffableSnapshot(animated: Bool) {
         let existingIDs = Set(dataSource.snapshot().itemIdentifiers)
-        var snapshot = NSDiffableDataSourceSnapshot<String, String>()
-        for section in sections {
-            snapshot.appendSections([section.id])
-            snapshot.appendItems(section.photoIDs, toSection: section.id)
-        }
+        var snapshot = NSDiffableDataSourceSnapshot<GridSection, String>()
+        snapshot.appendSections([.main])
+        snapshot.appendItems(flatPhotoIDs, toSection: .main)
         let itemsToReconfigure = flatPhotoIDs.filter { existingIDs.contains($0) }
         if !itemsToReconfigure.isEmpty {
             snapshot.reconfigureItems(itemsToReconfigure)
@@ -274,34 +234,6 @@ final class PhotoGridViewController: UIViewController,
                 isSelected: selectedIDs.contains(assetID),
                 accessibilityDateText: dateText
             )
-        }
-    }
-
-    private func refreshVisibleSectionHeaders() {
-        let visibleHeaderPaths = collectionView.indexPathsForVisibleSupplementaryElements(
-            ofKind: UICollectionView.elementKindSectionHeader
-        )
-        let currentSectionIDs = dataSource.snapshot().sectionIdentifiers
-        for indexPath in visibleHeaderPaths {
-            guard indexPath.section < currentSectionIDs.count,
-                  let header = collectionView.supplementaryView(
-                    forElementKind: UICollectionView.elementKindSectionHeader,
-                    at: indexPath
-                  ) as? DaySectionHeaderView else {
-                continue
-            }
-            let sectionID = currentSectionIDs[indexPath.section]
-            if let section = sections.first(where: { $0.id == sectionID }) {
-                let allSelected = !section.photoIDs.isEmpty && section.photoIDs.allSatisfy { selectedIDs.contains($0) }
-                header.configure(
-                    title: section.title,
-                    count: section.photoIDs.count,
-                    isFullySelected: allSelected,
-                    onToggleDay: { [weak self] in
-                        self?.onToggleDaySelection?(section.id)
-                    }
-                )
-            }
         }
     }
 

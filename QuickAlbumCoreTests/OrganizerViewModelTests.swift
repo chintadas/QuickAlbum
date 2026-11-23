@@ -190,15 +190,17 @@ final class OrganizerViewModelTests: XCTestCase {
         vm.sortOrder = .oldestFirst
         XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p2", "p1"])
 
-        // Day selection toggle
-        XCTAssertEqual(vm.visibleSections.count, 1)
-        let dayID = vm.visibleSections[0].id
-        vm.toggleDaySelection(sectionID: dayID)
-        XCTAssertTrue(vm.isDayFullySelected(sectionID: dayID))
+        // Selection controls
+        vm.selectAllVisible()
         XCTAssertEqual(vm.selectedAssetIDs, ["p1", "p2"])
 
-        vm.toggleDaySelection(sectionID: dayID)
-        XCTAssertFalse(vm.isDayFullySelected(sectionID: dayID))
+        vm.toggleSelection("p1")
+        XCTAssertEqual(vm.selectedAssetIDs, ["p2"])
+
+        vm.setSelection("p1", selected: true)
+        XCTAssertEqual(vm.selectedAssetIDs, ["p1", "p2"])
+
+        vm.clearSelection()
         XCTAssertTrue(vm.selectedAssetIDs.isEmpty)
     }
 

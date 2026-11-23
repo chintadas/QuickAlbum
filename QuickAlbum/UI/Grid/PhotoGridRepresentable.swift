@@ -12,9 +12,6 @@ struct PhotoGridRepresentable: UIViewControllerRepresentable {
         controller.onSetSelection = { assetID, selected in
             viewModel.setSelection(assetID, selected: selected)
         }
-        controller.onToggleDaySelection = { sectionID in
-            viewModel.toggleDaySelection(sectionID: sectionID)
-        }
         controller.onOpenPreview = { assetID in
             onOpenPreview(assetID)
         }
@@ -32,7 +29,6 @@ struct PhotoGridRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: PhotoGridViewController, context: Context) {
         uiViewController.applyState(
-            sections: viewModel.visibleSections,
             photoItemsByID: viewModel.visiblePhotoItemsByID,
             flatPhotoIDs: viewModel.flatVisiblePhotoIDs,
             selectedIDs: viewModel.selectedAssetIDs,
