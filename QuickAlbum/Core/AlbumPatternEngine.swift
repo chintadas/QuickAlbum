@@ -369,10 +369,6 @@ public enum AlbumPatternEngine {
         )
     }
 
-    public static func earliestDate(from dates: [Date?], fallback: Date = Date()) -> Date {
-        dates.compactMap { $0 }.min() ?? fallback
-    }
-
     public static func renderDatePrefix(
         for date: Date,
         pattern: AlbumPattern,

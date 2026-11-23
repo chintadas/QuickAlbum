@@ -131,16 +131,6 @@ public final class OrganizerViewModel {
         nextPlaceholderCandidate.title
     }
 
-    public func nextPlaceholderTitle(for date: Date) -> String {
-        AlbumPatternEngine.computeNextAlbum(
-            for: date,
-            existingAlbums: allAlbumSummaries,
-            pattern: pattern,
-            counterStore: counterStore,
-            calendar: calendar
-        ).title
-    }
-
     public var trayAlbums: [AlbumSummary] {
         let sorted = AlbumTraySorter.sortForTray(
             albums: allAlbumSummaries,
@@ -360,7 +350,6 @@ public final class OrganizerViewModel {
                     createdNewAlbum: true,
                     patternKey: candidate.highWaterKey,
                     previousHighWaterMark: candidate.priorHighWaterMark,
-                    expiresAt: self.nowProvider().addingTimeInterval(5),
                     message: "Added \(count) to \(createdRecord.title)"
                 )
                 self.showToast(toast)
@@ -394,7 +383,6 @@ public final class OrganizerViewModel {
                     createdNewAlbum: false,
                     patternKey: nil,
                     previousHighWaterMark: nil,
-                    expiresAt: self.nowProvider().addingTimeInterval(5),
                     message: "All \(uniqueIDs.count) photos already in \(targetAlbum.title)"
                 )
                 self.showToast(infoToast)
@@ -438,7 +426,6 @@ public final class OrganizerViewModel {
                     createdNewAlbum: false,
                     patternKey: nil,
                     previousHighWaterMark: nil,
-                    expiresAt: self.nowProvider().addingTimeInterval(5),
                     message: message
                 )
                 self.showToast(toast)
@@ -476,7 +463,6 @@ public final class OrganizerViewModel {
                         createdNewAlbum: false,
                         patternKey: nil,
                         previousHighWaterMark: nil,
-                        expiresAt: self.nowProvider().addingTimeInterval(4),
                         message: "Album kept (deletion cancelled)"
                     )
                     self.showToast(keptToast)

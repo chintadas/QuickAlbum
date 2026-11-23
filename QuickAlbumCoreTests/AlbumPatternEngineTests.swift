@@ -125,14 +125,7 @@ final class AlbumPatternEngineTests: XCTestCase {
         XCTAssertEqual(nextDayRollover.title, "26.11.19.100")
     }
 
-    func testEarliestDateAndReplacingLabel() {
-        let d1 = makeDate(2026, 11, 20)
-        let d2 = makeDate(2026, 11, 18)
-        let fallback = makeDate(2026, 11, 22)
-
-        XCTAssertEqual(AlbumPatternEngine.earliestDate(from: [d1, nil, d2], fallback: fallback), d2)
-        XCTAssertEqual(AlbumPatternEngine.earliestDate(from: [nil, nil], fallback: fallback), fallback)
-
+    func testReplacingLabel() {
         let parsed = AlbumPatternEngine.parse(title: "26.11.18.02 Old Label", pattern: .default)!
         XCTAssertEqual(AlbumPatternEngine.replacingLabel(in: parsed, with: "Beach", pattern: .default), "26.11.18.02 Beach")
         XCTAssertEqual(AlbumPatternEngine.replacingLabel(in: parsed, with: "   ", pattern: .default), "26.11.18.02")

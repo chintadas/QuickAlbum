@@ -278,7 +278,6 @@ private struct PreviewAlbumPickerSheet: View {
     var viewModel: OrganizerViewModel
     let assetID: String
     @State private var searchQuery = ""
-    @State private var showAll = true
 
     private var candidateAlbums: [AlbumSummary] {
         let alreadyIn = Set(viewModel.albumsContaining(assetID: assetID).map(\.id))
@@ -287,7 +286,7 @@ private struct PreviewAlbumPickerSheet: View {
         return AlbumTraySorter.sortForTray(
             albums: viewModel.allAlbumSummaries,
             targetDatePrefix: prefix,
-            includeNonMatching: showAll,
+            includeNonMatching: true,
             searchQuery: searchQuery
         ).filter { !alreadyIn.contains($0.id) }
     }

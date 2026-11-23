@@ -125,7 +125,6 @@ public struct UndoAction: Identifiable, Equatable, Sendable {
     public let createdNewAlbum: Bool
     public let patternKey: String?
     public let previousHighWaterMark: Int?
-    public let expiresAt: Date
     public let message: String
 
     public var canUndo: Bool {
@@ -141,7 +140,6 @@ public struct UndoAction: Identifiable, Equatable, Sendable {
         createdNewAlbum: Bool,
         patternKey: String?,
         previousHighWaterMark: Int?,
-        expiresAt: Date,
         message: String
     ) {
         self.id = id
@@ -152,7 +150,6 @@ public struct UndoAction: Identifiable, Equatable, Sendable {
         self.createdNewAlbum = createdNewAlbum
         self.patternKey = patternKey
         self.previousHighWaterMark = previousHighWaterMark
-        self.expiresAt = expiresAt
         self.message = message
     }
 }

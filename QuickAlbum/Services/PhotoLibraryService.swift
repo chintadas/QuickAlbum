@@ -17,7 +17,6 @@ actor PhotoLibraryService: PhotoLibraryServing {
     private var lastAssetsFetchResult: PHFetchResult<PHAsset>?
     private var lastAlbumsFetchResult: PHFetchResult<PHAssetCollection>?
     private var lastAlbumAssetResults: [String: PHFetchResult<PHAsset>] = [:]
-    private var cachedSnapshot: PhotoLibrarySnapshot = .empty
 
     deinit {
         if let proxy = observerProxy {
@@ -55,9 +54,7 @@ actor PhotoLibraryService: PhotoLibraryServing {
 
     func buildInitialIndex() async -> PhotoLibrarySnapshot {
         registerObserverIfNeeded()
-        let snapshot = fetchFullSnapshot()
-        cachedSnapshot = snapshot
-        return snapshot
+        return fetchFullSnapshot()
     }
 
     nonisolated func libraryChanges() -> AsyncStream<PhotoLibrarySnapshot> {
@@ -117,7 +114,6 @@ actor PhotoLibraryService: PhotoLibraryServing {
 
         guard needsRefresh else { return }
         let updated = fetchFullSnapshot()
-        cachedSnapshot = updated
         for continuation in continuations.values {
             continuation.yield(updated)
         }

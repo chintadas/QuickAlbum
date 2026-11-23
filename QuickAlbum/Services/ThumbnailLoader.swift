@@ -101,8 +101,4 @@ final class ThumbnailLoader {
             }
         }
     }
-
-    func invalidateCoverCache(for assetID: String) {
-        coverCache.removeObject(forKey: assetID as NSString)
-    }
 }
