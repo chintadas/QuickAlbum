@@ -168,11 +168,16 @@ final class OrganizerViewModelTests: XCTestCase {
 
         await vm.loadLibrary()
 
-        // Default: allUserAlbums -> p1 & p2 unassigned
+        // Default: No Album with allUserAlbums -> p1 & p2 unassigned
+        XCTAssertEqual(vm.membershipFilter, .noAlbum)
         XCTAssertEqual(vm.unassignedPhotoCount, 2)
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p1", "p2"])
+
+        // Switch to All
+        vm.membershipFilter = .all
         XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p4", "p3", "p1", "p2"])
 
-        // Filter to No Album
+        // Filter back to No Album
         vm.membershipFilter = .noAlbum
         XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p1", "p2"])
 
@@ -216,7 +221,7 @@ final class OrganizerViewModelTests: XCTestCase {
         )
 
         await vm.loadLibrary()
-        vm.membershipFilter = .noAlbum
+        XCTAssertEqual(vm.membershipFilter, .noAlbum)
         XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p1", "p2"])
 
         vm.toggleSelection("p1")

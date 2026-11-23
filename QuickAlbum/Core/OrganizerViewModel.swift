@@ -17,7 +17,7 @@ public final class OrganizerViewModel {
 
     public private(set) var authorizationStatus: PhotoAuthorizationStatus
     public private(set) var isLoading: Bool = false
-    public var membershipFilter: MembershipFilter = .all {
+    public var membershipFilter: MembershipFilter = .noAlbum {
         didSet {
             guard membershipFilter != oldValue else { return }
             rebuildVisibleGrid()
