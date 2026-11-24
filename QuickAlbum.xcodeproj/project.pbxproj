@@ -49,7 +49,6 @@
 
 /* Begin PBXFileReference section */
 		F00000000000000000000000 /* QuickAlbum.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickAlbum.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F00000000000000000000020 /* QuickAlbumTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuickAlbumTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F00000000000000000000001 /* QuickAlbumApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAlbumApp.swift; sourceTree = "<group>"; };
 		F00000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		F00000000000000000000003 /* AlbumPatternEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumPatternEngine.swift; sourceTree = "<group>"; };
@@ -75,6 +74,7 @@
 		F00000000000000000000018 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		F00000000000000000000019 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F0000000000000000000001A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F00000000000000000000020 /* QuickAlbumTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuickAlbumTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F00000000000000000000021 /* AlbumPatternEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumPatternEngineTests.swift; sourceTree = "<group>"; };
 		F00000000000000000000022 /* PhotoAlbumIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoAlbumIndexTests.swift; sourceTree = "<group>"; };
 		F00000000000000000000023 /* AlbumTraySorterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumTraySorterTests.swift; sourceTree = "<group>"; };
@@ -99,7 +99,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		G00000000000000000000001 /* Root */ = {
+		G00000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
 				G00000000000000000000002 /* QuickAlbum */,
@@ -188,14 +188,6 @@
 			path = Detail;
 			sourceTree = "<group>";
 		};
-		G0000000000000000000000B /* Settings */ = {
-			isa = PBXGroup;
-			children = (
-				F00000000000000000000018 /* SettingsView.swift */,
-			);
-			path = Settings;
-			sourceTree = "<group>";
-		};
 		G00000000000000000000009 /* QuickAlbumCoreTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -214,6 +206,14 @@
 				F00000000000000000000020 /* QuickAlbumTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		G0000000000000000000000B /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000018 /* SettingsView.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -281,7 +281,7 @@
 				en,
 				Base,
 			);
-			mainGroup = G00000000000000000000001 /* Root */;
+			mainGroup = G00000000000000000000001;
 			productRefGroup = G0000000000000000000000A /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -415,6 +415,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = C85GCH82RV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = QuickAlbum/Info.plist;
@@ -438,6 +439,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = C85GCH82RV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = QuickAlbum/Info.plist;
