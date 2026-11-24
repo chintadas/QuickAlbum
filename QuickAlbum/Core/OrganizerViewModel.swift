@@ -1,9 +1,17 @@
 import Foundation
 import Observation
+import os
 
 @MainActor
 @Observable
 public final class OrganizerViewModel {
+    private static let debugLog = Logger(subsystem: "com.quickalbum.app", category: "AlbumPerf")
+
+    private static func formatMs(_ duration: Duration) -> String {
+        let ms = Double(duration.components.seconds) * 1000.0 + Double(duration.components.attoseconds) / 1e15
+        return String(format: "%.1fms", ms)
+    }
+
     // MARK: - Dependencies
 
     private let service: PhotoLibraryServing
@@ -241,10 +249,34 @@ public final class OrganizerViewModel {
             for await updatedSnapshot in stream {
                 guard let self, !Task.isCancelled else { break }
                 if self.authorizationStatus == .authorized {
+                    if self.isSnapshotEquivalentToCurrent(updatedSnapshot) {
+                        continue
+                    }
                     self.applySnapshot(updatedSnapshot)
                 }
             }
         }
+    }
+
+    private func isSnapshotEquivalentToCurrent(_ incoming: PhotoLibrarySnapshot) -> Bool {
+        guard incoming.photos.count == snapshot.photos.count,
+              incoming.albums.count == rawAlbumsByID.count else {
+            return false
+        }
+        for album in incoming.albums {
+            if rawAlbumsByID[album.id] != album {
+                return false
+            }
+        }
+        if incoming.photos == snapshot.photos {
+            return true
+        }
+        for photo in incoming.photos {
+            if rawPhotosByID[photo.id] != photo {
+                return false
+            }
+        }
+        return true
     }
 
     // MARK: - Selection Controls
@@ -325,10 +357,12 @@ public final class OrganizerViewModel {
             )
 
             do {
+                let opStart = ContinuousClock.now
                 let createdRecord = try await self.service.createAlbum(
                     title: candidate.title,
                     addingAssetIDs: uniqueIDs
                 )
+
                 AlbumPatternEngine.commitCounter(
                     key: candidate.highWaterKey,
                     counter: candidate.counter,
@@ -353,7 +387,13 @@ public final class OrganizerViewModel {
                     message: "Added \(count) to \(createdRecord.title)"
                 )
                 self.showToast(toast)
+                Self.debugLog.debug(
+                    "[VM createAlbum] title=\(createdRecord.title, privacy: .public) count=\(count, privacy: .public) in \(Self.formatMs(ContinuousClock.now - opStart), privacy: .public)"
+                )
             } catch {
+                Self.debugLog.error(
+                    "[VM createAlbum] failed: \(error.localizedDescription, privacy: .public)"
+                )
                 self.errorMessage = error.localizedDescription
             }
         }
@@ -390,6 +430,7 @@ public final class OrganizerViewModel {
             }
 
             do {
+                let opStart = ContinuousClock.now
                 let result = try await self.service.addAssets(newIDs, toAlbum: albumID)
                 let actuallyAdded = result.addedAssetIDs
                 let totalSkipped = skippedCount + result.skippedAssetIDs.count
@@ -429,7 +470,13 @@ public final class OrganizerViewModel {
                     message: message
                 )
                 self.showToast(toast)
+                Self.debugLog.debug(
+                    "[VM addAssets] album=\(targetAlbum.title, privacy: .public) added=\(actuallyAdded.count, privacy: .public) skipped=\(totalSkipped, privacy: .public) in \(Self.formatMs(ContinuousClock.now - opStart), privacy: .public)"
+                )
             } catch {
+                Self.debugLog.error(
+                    "[VM addAssets] failed: \(error.localizedDescription, privacy: .public)"
+                )
                 self.errorMessage = error.localizedDescription
             }
         }
@@ -467,6 +514,9 @@ public final class OrganizerViewModel {
                     )
                     self.showToast(keptToast)
                 } catch {
+                    Self.debugLog.error(
+                        "[VM undoDeleteAlbum] failed: \(error.localizedDescription, privacy: .public)"
+                    )
                     self.errorMessage = error.localizedDescription
                 }
             } else {
@@ -480,12 +530,15 @@ public final class OrganizerViewModel {
                             id: record.id,
                             title: record.title,
                             assetIDs: remainingIDs,
-                            coverAssetID: remainingIDs.last,
+                            coverAssetID: remainingIDs.first,
                             latestAssetDate: remainingIDs.compactMap { self.rawPhotosByID[$0]?.creationDate }.max()
                         )
                     }
                     self.applySnapshot(PhotoLibrarySnapshot(photos: self.snapshot.photos, albums: updatedAlbums))
                 } catch {
+                    Self.debugLog.error(
+                        "[VM undoRemoveAssets] failed: \(error.localizedDescription, privacy: .public)"
+                    )
                     self.errorMessage = error.localizedDescription
                 }
             }
@@ -504,6 +557,7 @@ public final class OrganizerViewModel {
 
         await enqueueMutation {
             do {
+                let opStart = ContinuousClock.now
                 try await self.service.removeAssets(uniqueIDs, fromAlbum: albumID)
                 let removeSet = Set(uniqueIDs)
                 let updatedAlbums = self.snapshot.albums.map { record -> RawAlbumRecord in
@@ -513,12 +567,18 @@ public final class OrganizerViewModel {
                         id: record.id,
                         title: record.title,
                         assetIDs: remainingIDs,
-                        coverAssetID: remainingIDs.last,
+                        coverAssetID: remainingIDs.first,
                         latestAssetDate: remainingIDs.compactMap { self.rawPhotosByID[$0]?.creationDate }.max()
                     )
                 }
                 self.applySnapshot(PhotoLibrarySnapshot(photos: self.snapshot.photos, albums: updatedAlbums))
+                Self.debugLog.debug(
+                    "[VM removeAssets] count=\(uniqueIDs.count, privacy: .public) in \(Self.formatMs(ContinuousClock.now - opStart), privacy: .public)"
+                )
             } catch {
+                Self.debugLog.error(
+                    "[VM removeAssets] failed: \(error.localizedDescription, privacy: .public)"
+                )
                 self.errorMessage = error.localizedDescription
             }
         }
@@ -661,21 +721,6 @@ public final class OrganizerViewModel {
     }
 
     private func rebuildMembershipCountsAndGrid() {
-        var unassigned = 0
-        for photo in snapshot.photos {
-            if hideScreenshots && photo.isScreenshot {
-                continue
-            }
-            let count = albumIndex.countedAlbumCount(
-                for: photo.id,
-                scope: membershipScope,
-                matchingAlbumIDs: matchingAlbumIDs
-            )
-            if count == 0 {
-                unassigned += 1
-            }
-        }
-        self.unassignedPhotoCount = unassigned
         rebuildVisibleGrid()
     }
 

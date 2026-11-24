@@ -9,6 +9,7 @@ actor MockPhotoLibraryService: PhotoLibraryServing {
     private var status: PhotoAuthorizationStatus
     private var snapshot: PhotoLibrarySnapshot
     private var nextCreatedIndex = 1
+    private var changeContinuations: [UUID: AsyncStream<PhotoLibrarySnapshot>.Continuation] = [:]
     var shouldThrowCancelledOnDelete = false
     var createDelay: Duration = .zero
     private(set) var createdAlbumTitles: [String] = []
@@ -30,6 +31,13 @@ actor MockPhotoLibraryService: PhotoLibraryServing {
         createDelay = delay
     }
 
+    func emitLibraryChange(_ updatedSnapshot: PhotoLibrarySnapshot) {
+        snapshot = updatedSnapshot
+        for continuation in changeContinuations.values {
+            continuation.yield(updatedSnapshot)
+        }
+    }
+
     nonisolated func authorizationStatus() -> PhotoAuthorizationStatus {
         .authorized
     }
@@ -44,8 +52,27 @@ actor MockPhotoLibraryService: PhotoLibraryServing {
 
     nonisolated func libraryChanges() -> AsyncStream<PhotoLibrarySnapshot> {
         AsyncStream { continuation in
-            continuation.finish()
+            let id = UUID()
+            Task {
+                await self.registerChangeContinuation(id: id, continuation: continuation)
+            }
+            continuation.onTermination = { _ in
+                Task {
+                    await self.removeChangeContinuation(id: id)
+                }
+            }
         }
+    }
+
+    private func registerChangeContinuation(
+        id: UUID,
+        continuation: AsyncStream<PhotoLibrarySnapshot>.Continuation
+    ) {
+        changeContinuations[id] = continuation
+    }
+
+    private func removeChangeContinuation(id: UUID) {
+        changeContinuations.removeValue(forKey: id)
     }
 
     func addAssets(_ assetIDs: [String], toAlbum albumID: String) async throws -> AddAssetsResult {
@@ -357,5 +384,57 @@ final class OrganizerViewModelTests: XCTestCase {
         // End drag -> unfreezes and smart-orders a18 to front
         vm.setDragSessionActive(false)
         XCTAssertEqual(vm.trayAlbums.map(\.id), ["a18", "a20"])
+    }
+
+    func testLibraryChangesSkipsEquivalentSnapshotAndAppliesRealChanges() async {
+        let initial = makeSampleSnapshot()
+        let service = MockPhotoLibraryService(snapshot: initial)
+        let vm = OrganizerViewModel(
+            service: service,
+            counterStore: InMemoryCounterHistoryStore(),
+            preferences: InMemoryPreferencesStore(),
+            calendar: utcCalendar,
+            nowProvider: { self.makeDate(2026, 11, 22) }
+        )
+
+        await vm.start()
+        defer { vm.stopObserving() }
+        await Task.yield()
+
+        XCTAssertEqual(vm.dataVersion, 1)
+        XCTAssertEqual(vm.unassignedPhotoCount, 2)
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p1", "p2"])
+
+        // Reordered albums array with identical contents should be treated as equivalent and skipped
+        let equivalent = PhotoLibrarySnapshot(
+            photos: initial.photos,
+            albums: Array(initial.albums.reversed())
+        )
+        await service.emitLibraryChange(equivalent)
+        for _ in 0..<5 { await Task.yield() }
+
+        XCTAssertEqual(vm.dataVersion, 1)
+        XCTAssertEqual(vm.unassignedPhotoCount, 2)
+
+        // Real membership change (p1 added to alb-match) must apply and increment dataVersion
+        let updatedAlbums = initial.albums.map { album -> RawAlbumRecord in
+            guard album.id == "alb-match" else { return album }
+            return RawAlbumRecord(
+                id: album.id,
+                title: album.title,
+                assetIDs: album.assetIDs + ["p1"],
+                coverAssetID: album.coverAssetID,
+                latestAssetDate: album.latestAssetDate
+            )
+        }
+        await service.emitLibraryChange(PhotoLibrarySnapshot(photos: initial.photos, albums: updatedAlbums))
+        for _ in 0..<10 {
+            if vm.dataVersion == 2 { break }
+            await Task.yield()
+        }
+
+        XCTAssertEqual(vm.dataVersion, 2)
+        XCTAssertEqual(vm.unassignedPhotoCount, 1)
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p2"])
     }
 }

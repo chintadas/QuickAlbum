@@ -85,6 +85,7 @@ final class PhotoGridViewController: UIViewController,
     ) {
         let previousColumnCount = self.columnCount
         let previousSelected = self.selectedIDs
+        let previousItemsByID = self.photoItemsByID
         let structureChanged = self.lastAppliedDataVersion != dataVersion
 
         self.photoItemsByID = photoItemsByID
@@ -102,7 +103,11 @@ final class PhotoGridViewController: UIViewController,
         if structureChanged {
             self.lastAppliedDataVersion = dataVersion
             refreshPHAssetCache(for: flatPhotoIDs)
-            applyDiffableSnapshot(animated: true)
+            applyDiffableSnapshot(
+                animated: true,
+                previousItemsByID: previousItemsByID,
+                previousSelectedIDs: previousSelected
+            )
         } else if previousSelected != selectedIDs {
             let changedIDs = previousSelected.symmetricDifference(selectedIDs)
             reconfigureVisibleCells(for: changedIDs)
@@ -208,12 +213,24 @@ final class PhotoGridViewController: UIViewController,
 
     // MARK: - Snapshot & Cache Updates
 
-    private func applyDiffableSnapshot(animated: Bool) {
+    private func applyDiffableSnapshot(
+        animated: Bool,
+        previousItemsByID: [String: PhotoItem],
+        previousSelectedIDs: Set<String>
+    ) {
         let existingIDs = Set(dataSource.snapshot().itemIdentifiers)
         var snapshot = NSDiffableDataSourceSnapshot<GridSection, String>()
         snapshot.appendSections([.main])
         snapshot.appendItems(flatPhotoIDs, toSection: .main)
-        let itemsToReconfigure = flatPhotoIDs.filter { existingIDs.contains($0) }
+        let itemsToReconfigure = flatPhotoIDs.filter { id in
+            guard existingIDs.contains(id) else { return false }
+            let prev = previousItemsByID[id]
+            let curr = photoItemsByID[id]
+            if prev?.countedAlbumCount != curr?.countedAlbumCount { return true }
+            if prev?.creationDate != curr?.creationDate { return true }
+            if previousSelectedIDs.contains(id) != selectedIDs.contains(id) { return true }
+            return false
+        }
         if !itemsToReconfigure.isEmpty {
             snapshot.reconfigureItems(itemsToReconfigure)
         }

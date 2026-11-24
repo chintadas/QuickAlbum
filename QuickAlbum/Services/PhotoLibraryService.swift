@@ -10,13 +10,35 @@ private final class PhotoLibraryObserverProxy: NSObject, PHPhotoLibraryChangeObs
     }
 }
 
+private struct LoadedLibraryState: @unchecked Sendable {
+    let assetsFetch: PHFetchResult<PHAsset>
+    let albumsFetch: PHFetchResult<PHAssetCollection>
+    let albumAssetResults: [String: PHFetchResult<PHAsset>]
+    let photosByID: [String: RawPhotoRecord]
+    let photoOrder: [String]
+    let albumsByID: [String: RawAlbumRecord]
+    let albumOrder: [String]
+    let snapshot: PhotoLibrarySnapshot
+}
+
 actor PhotoLibraryService: PhotoLibraryServing {
+    private static let debugLog = Logger(subsystem: "com.quickalbum.app", category: "AlbumPerf")
+
+    private static func formatMs(_ duration: Duration) -> String {
+        let ms = Double(duration.components.seconds) * 1000.0 + Double(duration.components.attoseconds) / 1e15
+        return String(format: "%.1fms", ms)
+    }
+
     private var continuations: [UUID: AsyncStream<PhotoLibrarySnapshot>.Continuation] = [:]
     private var observerProxy: PhotoLibraryObserverProxy?
 
     private var lastAssetsFetchResult: PHFetchResult<PHAsset>?
     private var lastAlbumsFetchResult: PHFetchResult<PHAssetCollection>?
     private var lastAlbumAssetResults: [String: PHFetchResult<PHAsset>] = [:]
+    private var cachedPhotosByID: [String: RawPhotoRecord] = [:]
+    private var cachedPhotoOrder: [String] = []
+    private var cachedAlbumsByID: [String: RawAlbumRecord] = [:]
+    private var cachedAlbumOrder: [String] = []
 
     deinit {
         if let proxy = observerProxy {
@@ -54,7 +76,15 @@ actor PhotoLibraryService: PhotoLibraryServing {
 
     func buildInitialIndex() async -> PhotoLibrarySnapshot {
         registerObserverIfNeeded()
-        return fetchFullSnapshot()
+        let loaded = await loadFullSnapshotOffActor(reason: "initialIndex")
+        lastAssetsFetchResult = loaded.assetsFetch
+        lastAlbumsFetchResult = loaded.albumsFetch
+        lastAlbumAssetResults = loaded.albumAssetResults
+        cachedPhotosByID = loaded.photosByID
+        cachedPhotoOrder = loaded.photoOrder
+        cachedAlbumsByID = loaded.albumsByID
+        cachedAlbumOrder = loaded.albumOrder
+        return loaded.snapshot
     }
 
     nonisolated func libraryChanges() -> AsyncStream<PhotoLibrarySnapshot> {
@@ -93,100 +123,436 @@ actor PhotoLibraryService: PhotoLibraryServing {
     }
 
     private func handleLibraryChange(_ change: PHChange) {
-        var needsRefresh = false
+        guard lastAssetsFetchResult != nil || lastAlbumsFetchResult != nil else {
+            return
+        }
 
+        let opStart = ContinuousClock.now
+        var photosMutated = false
+        var albumsMutated = false
+        var dateChangedAssetIDs: Set<String> = []
+        var alreadyUpdatedAlbumIDs: Set<String> = []
+
+        var assetsInserted = 0
+        var assetsRemoved = 0
+        var assetsMetadataChanged = 0
+        var albumsInserted = 0
+        var albumsRemoved = 0
+        var albumsRenamed = 0
+        var albumMembershipsChanged = 0
+        var checkedAlbums = 0
+
+        // Step A: Incremental photo asset changes
         if let assetsResult = lastAssetsFetchResult,
-           change.changeDetails(for: assetsResult) != nil {
-            needsRefresh = true
-        }
-        if let albumsResult = lastAlbumsFetchResult,
-           change.changeDetails(for: albumsResult) != nil {
-            needsRefresh = true
-        }
-        if !needsRefresh {
-            for (_, albumAssetsResult) in lastAlbumAssetResults {
-                if change.changeDetails(for: albumAssetsResult) != nil {
-                    needsRefresh = true
-                    break
+           let details = change.changeDetails(for: assetsResult) {
+            lastAssetsFetchResult = details.fetchResultAfterChanges
+
+            if details.hasIncrementalChanges {
+                var removedIDs: Set<String> = []
+                for asset in details.removedObjects {
+                    let id = asset.localIdentifier
+                    if cachedPhotosByID.removeValue(forKey: id) != nil {
+                        removedIDs.insert(id)
+                        assetsRemoved += 1
+                        photosMutated = true
+                    }
                 }
+
+                var insertedIDs: [String] = []
+                for asset in details.insertedObjects {
+                    let record = Self.makeRawPhotoRecord(from: asset)
+                    if cachedPhotosByID[record.id] == nil {
+                        insertedIDs.append(record.id)
+                    }
+                    if cachedPhotosByID[record.id] != record {
+                        cachedPhotosByID[record.id] = record
+                        assetsInserted += 1
+                        photosMutated = true
+                    }
+                }
+
+                for asset in details.changedObjects {
+                    let updated = Self.makeRawPhotoRecord(from: asset)
+                    let previous = cachedPhotosByID[updated.id]
+                    if previous != updated {
+                        if previous?.creationDate != updated.creationDate {
+                            dateChangedAssetIDs.insert(updated.id)
+                        }
+                        cachedPhotosByID[updated.id] = updated
+                        assetsMetadataChanged += 1
+                        photosMutated = true
+                    }
+                }
+
+                if !removedIDs.isEmpty {
+                    cachedPhotoOrder.removeAll { removedIDs.contains($0) }
+                }
+                if !insertedIDs.isEmpty {
+                    let existingOrderSet = Set(cachedPhotoOrder)
+                    for id in insertedIDs where !existingOrderSet.contains(id) {
+                        cachedPhotoOrder.append(id)
+                    }
+                }
+            } else {
+                let afterFetch = details.fetchResultAfterChanges
+                var rebuiltByID: [String: RawPhotoRecord] = [:]
+                var rebuiltOrder: [String] = []
+                rebuiltByID.reserveCapacity(afterFetch.count)
+                rebuiltOrder.reserveCapacity(afterFetch.count)
+                afterFetch.enumerateObjects { asset, _, _ in
+                    let record = Self.makeRawPhotoRecord(from: asset)
+                    if self.cachedPhotosByID[record.id]?.creationDate != record.creationDate {
+                        dateChangedAssetIDs.insert(record.id)
+                    }
+                    rebuiltByID[record.id] = record
+                    rebuiltOrder.append(record.id)
+                }
+                if rebuiltByID != cachedPhotosByID {
+                    photosMutated = true
+                }
+                cachedPhotosByID = rebuiltByID
+                cachedPhotoOrder = rebuiltOrder
             }
         }
 
-        guard needsRefresh else { return }
-        let updated = fetchFullSnapshot()
+        // Step B: Incremental album collection list changes (create / delete / rename)
+        if let albumsResult = lastAlbumsFetchResult,
+           let details = change.changeDetails(for: albumsResult) {
+            lastAlbumsFetchResult = details.fetchResultAfterChanges
+
+            if details.hasIncrementalChanges {
+                for collection in details.removedObjects {
+                    let id = collection.localIdentifier
+                    if cachedAlbumsByID.removeValue(forKey: id) != nil {
+                        albumsRemoved += 1
+                        albumsMutated = true
+                    }
+                    lastAlbumAssetResults.removeValue(forKey: id)
+                }
+
+                for collection in details.insertedObjects {
+                    let id = collection.localIdentifier
+                    let title = collection.localizedTitle ?? "Untitled"
+                    let assetsResult = PHAsset.fetchAssets(in: collection, options: nil)
+                    lastAlbumAssetResults[id] = assetsResult
+                    cachedAlbumsByID[id] = Self.makeRawAlbumRecord(
+                        id: id,
+                        title: title,
+                        assetsResult: assetsResult,
+                        photosByID: cachedPhotosByID
+                    )
+                    alreadyUpdatedAlbumIDs.insert(id)
+                    albumsInserted += 1
+                    albumsMutated = true
+                }
+
+                for collection in details.changedObjects {
+                    let id = collection.localIdentifier
+                    let title = collection.localizedTitle ?? "Untitled"
+                    if let existing = cachedAlbumsByID[id] {
+                        if existing.title != title {
+                            cachedAlbumsByID[id] = RawAlbumRecord(
+                                id: existing.id,
+                                title: title,
+                                assetIDs: existing.assetIDs,
+                                coverAssetID: existing.coverAssetID,
+                                latestAssetDate: existing.latestAssetDate
+                            )
+                            albumsRenamed += 1
+                            albumsMutated = true
+                        }
+                    } else {
+                        let assetsResult = PHAsset.fetchAssets(in: collection, options: nil)
+                        lastAlbumAssetResults[id] = assetsResult
+                        cachedAlbumsByID[id] = Self.makeRawAlbumRecord(
+                            id: id,
+                            title: title,
+                            assetsResult: assetsResult,
+                            photosByID: cachedPhotosByID
+                        )
+                        alreadyUpdatedAlbumIDs.insert(id)
+                        albumsInserted += 1
+                        albumsMutated = true
+                    }
+                }
+            } else {
+                let afterFetch = details.fetchResultAfterChanges
+                var survivingIDs: Set<String> = []
+                survivingIDs.reserveCapacity(afterFetch.count)
+
+                afterFetch.enumerateObjects { collection, _, _ in
+                    let id = collection.localIdentifier
+                    let title = collection.localizedTitle ?? "Untitled"
+                    survivingIDs.insert(id)
+
+                    if let existing = self.cachedAlbumsByID[id] {
+                        if existing.title != title {
+                            self.cachedAlbumsByID[id] = RawAlbumRecord(
+                                id: existing.id,
+                                title: title,
+                                assetIDs: existing.assetIDs,
+                                coverAssetID: existing.coverAssetID,
+                                latestAssetDate: existing.latestAssetDate
+                            )
+                            albumsRenamed += 1
+                            albumsMutated = true
+                        }
+                    } else {
+                        let assetsResult = PHAsset.fetchAssets(in: collection, options: nil)
+                        self.lastAlbumAssetResults[id] = assetsResult
+                        self.cachedAlbumsByID[id] = Self.makeRawAlbumRecord(
+                            id: id,
+                            title: title,
+                            assetsResult: assetsResult,
+                            photosByID: self.cachedPhotosByID
+                        )
+                        alreadyUpdatedAlbumIDs.insert(id)
+                        albumsInserted += 1
+                        albumsMutated = true
+                    }
+                }
+
+                let staleIDs = cachedAlbumsByID.keys.filter { !survivingIDs.contains($0) }
+                for id in staleIDs {
+                    cachedAlbumsByID.removeValue(forKey: id)
+                    lastAlbumAssetResults.removeValue(forKey: id)
+                    albumsRemoved += 1
+                    albumsMutated = true
+                }
+            }
+
+            var newAlbumOrder: [String] = []
+            newAlbumOrder.reserveCapacity(details.fetchResultAfterChanges.count)
+            details.fetchResultAfterChanges.enumerateObjects { collection, _, _ in
+                newAlbumOrder.append(collection.localIdentifier)
+            }
+            if newAlbumOrder != cachedAlbumOrder {
+                cachedAlbumOrder = newAlbumOrder
+                albumsMutated = true
+            }
+        }
+
+        // Step C: Incremental per-album membership changes (only re-builds changed albums)
+        for albumID in Array(lastAlbumAssetResults.keys) {
+            if alreadyUpdatedAlbumIDs.contains(albumID) {
+                continue
+            }
+            guard let existingRecord = cachedAlbumsByID[albumID],
+                  let albumAssetsResult = lastAlbumAssetResults[albumID] else {
+                continue
+            }
+            checkedAlbums += 1
+            guard let details = change.changeDetails(for: albumAssetsResult) else {
+                continue
+            }
+            lastAlbumAssetResults[albumID] = details.fetchResultAfterChanges
+
+            if details.hasIncrementalChanges &&
+                details.insertedObjects.isEmpty &&
+                details.removedObjects.isEmpty &&
+                !details.hasMoves {
+                let hasDateChangeInAlbum = !dateChangedAssetIDs.isEmpty &&
+                    details.changedObjects.contains { dateChangedAssetIDs.contains($0.localIdentifier) }
+                if !hasDateChangeInAlbum {
+                    continue
+                }
+            }
+
+            let updatedRecord = Self.makeRawAlbumRecord(
+                id: albumID,
+                title: existingRecord.title,
+                assetsResult: details.fetchResultAfterChanges,
+                photosByID: cachedPhotosByID
+            )
+            if updatedRecord != existingRecord {
+                cachedAlbumsByID[albumID] = updatedRecord
+                albumMembershipsChanged += 1
+                albumsMutated = true
+            }
+        }
+
+        let elapsed = ContinuousClock.now - opStart
+        guard photosMutated || albumsMutated else {
+            return
+        }
+
+        let updatedSnapshot = makeCurrentSnapshot()
+        Self.debugLog.debug(
+            "[PHChange] incremental update in \(Self.formatMs(elapsed), privacy: .public): assets(+\(assetsInserted, privacy: .public)/-\(assetsRemoved, privacy: .public)/~\(assetsMetadataChanged, privacy: .public)) albums(+\(albumsInserted, privacy: .public)/-\(albumsRemoved, privacy: .public)/rename=\(albumsRenamed, privacy: .public)/membership=\(albumMembershipsChanged, privacy: .public)) checkedAlbums=\(checkedAlbums, privacy: .public)"
+        )
         for continuation in continuations.values {
-            continuation.yield(updated)
+            continuation.yield(updatedSnapshot)
         }
     }
 
-    private func fetchFullSnapshot() -> PhotoLibrarySnapshot {
-        let assetOptions = PHFetchOptions()
-        assetOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let assetFetch = PHAsset.fetchAssets(with: .image, options: assetOptions)
-        lastAssetsFetchResult = assetFetch
+    private func makeCurrentSnapshot() -> PhotoLibrarySnapshot {
+        let photos = cachedPhotoOrder.compactMap { cachedPhotosByID[$0] }
+        let albums = cachedAlbumOrder.compactMap { cachedAlbumsByID[$0] }
+        return PhotoLibrarySnapshot(photos: photos, albums: albums)
+    }
 
-        var photos: [RawPhotoRecord] = []
-        photos.reserveCapacity(assetFetch.count)
-        assetFetch.enumerateObjects { asset, _, _ in
-            let isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
-            photos.append(
-                RawPhotoRecord(
-                    id: asset.localIdentifier,
-                    creationDate: asset.creationDate,
-                    isScreenshot: isScreenshot,
-                    pixelWidth: asset.pixelWidth,
-                    pixelHeight: asset.pixelHeight
-                )
-            )
+    private static func makeRawPhotoRecord(from asset: PHAsset) -> RawPhotoRecord {
+        RawPhotoRecord(
+            id: asset.localIdentifier,
+            creationDate: asset.creationDate,
+            isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot),
+            pixelWidth: asset.pixelWidth,
+            pixelHeight: asset.pixelHeight
+        )
+    }
+
+    private static func makeRawAlbumRecord(
+        id: String,
+        title: String,
+        assetsResult: PHFetchResult<PHAsset>,
+        photosByID: [String: RawPhotoRecord]
+    ) -> RawAlbumRecord {
+        var entries: [(id: String, creationDate: Date?)] = []
+        entries.reserveCapacity(assetsResult.count)
+        assetsResult.enumerateObjects { asset, _, _ in
+            let assetID = asset.localIdentifier
+            if let cached = photosByID[assetID] {
+                entries.append((id: assetID, creationDate: cached.creationDate))
+            } else if asset.mediaType == .image {
+                entries.append((id: assetID, creationDate: asset.creationDate))
+            }
+        }
+        entries.sort { lhs, rhs in
+            switch (lhs.creationDate, rhs.creationDate) {
+            case let (l?, r?):
+                if l != r { return l > r }
+                return lhs.id < rhs.id
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                return lhs.id < rhs.id
+            }
         }
 
+        let sortedIDs = entries.map(\.id)
+        return RawAlbumRecord(
+            id: id,
+            title: title,
+            assetIDs: sortedIDs,
+            coverAssetID: entries.first?.id,
+            latestAssetDate: entries.first?.creationDate
+        )
+    }
+
+    private nonisolated func loadFullSnapshotOffActor(reason: String) async -> LoadedLibraryState {
+        let totalStart = ContinuousClock.now
+
+        let assetsStart = ContinuousClock.now
+        let assetFetch = PHAsset.fetchAssets(with: .image, options: nil)
+        var photosByID: [String: RawPhotoRecord] = [:]
+        var photoOrder: [String] = []
+        photosByID.reserveCapacity(assetFetch.count)
+        photoOrder.reserveCapacity(assetFetch.count)
+        assetFetch.enumerateObjects { asset, _, _ in
+            let record = Self.makeRawPhotoRecord(from: asset)
+            photosByID[record.id] = record
+            photoOrder.append(record.id)
+        }
+        let assetsDuration = ContinuousClock.now - assetsStart
+
+        let albumsStart = ContinuousClock.now
         let albumFetch = PHAssetCollection.fetchAssetCollections(
             with: .album,
             subtype: .albumRegular,
             options: nil
         )
-        lastAlbumsFetchResult = albumFetch
 
-        let albumAssetOptions = PHFetchOptions()
-        albumAssetOptions.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        albumAssetOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-
-        var albums: [RawAlbumRecord] = []
-        albums.reserveCapacity(albumFetch.count)
-        var newAlbumAssetResults: [String: PHFetchResult<PHAsset>] = [:]
-        newAlbumAssetResults.reserveCapacity(albumFetch.count)
-
+        var collections: [(id: String, title: String, collection: PHAssetCollection)] = []
+        var albumOrder: [String] = []
+        collections.reserveCapacity(albumFetch.count)
+        albumOrder.reserveCapacity(albumFetch.count)
         albumFetch.enumerateObjects { collection, _, _ in
-            let assetsResult = PHAsset.fetchAssets(in: collection, options: albumAssetOptions)
-            newAlbumAssetResults[collection.localIdentifier] = assetsResult
-
-            var assetIDs: [String] = []
-            assetIDs.reserveCapacity(assetsResult.count)
-            assetsResult.enumerateObjects { asset, _, _ in
-                assetIDs.append(asset.localIdentifier)
-            }
-
-            let coverAssetID = assetsResult.firstObject?.localIdentifier
-            let latestDate = assetsResult.firstObject?.creationDate
-
-            albums.append(
-                RawAlbumRecord(
-                    id: collection.localIdentifier,
-                    title: collection.localizedTitle ?? "Untitled",
-                    assetIDs: assetIDs,
-                    coverAssetID: coverAssetID,
-                    latestAssetDate: latestDate
-                )
-            )
+            let id = collection.localIdentifier
+            let title = collection.localizedTitle ?? "Untitled"
+            collections.append((id: id, title: title, collection: collection))
+            albumOrder.append(id)
         }
 
-        lastAlbumAssetResults = newAlbumAssetResults
-        return PhotoLibrarySnapshot(photos: photos, albums: albums)
+        var albumAssetResults: [String: PHFetchResult<PHAsset>] = [:]
+        var albumsByID: [String: RawAlbumRecord] = [:]
+        albumAssetResults.reserveCapacity(collections.count)
+        albumsByID.reserveCapacity(collections.count)
+        var totalAlbumAssetLinks = 0
+
+        if !collections.isEmpty {
+            let workerCount = min(4, collections.count)
+            let chunkSize = (collections.count + workerCount - 1) / workerCount
+            let photosLookup = photosByID
+
+            let batchResults = await withTaskGroup(
+                of: [(String, PHFetchResult<PHAsset>, RawAlbumRecord)].self,
+                returning: [(String, PHFetchResult<PHAsset>, RawAlbumRecord)].self
+            ) { group in
+                for workerIndex in 0..<workerCount {
+                    let start = workerIndex * chunkSize
+                    let end = min(collections.count, start + chunkSize)
+                    guard start < end else { continue }
+                    let slice = Array(collections[start..<end])
+                    group.addTask {
+                        var results: [(String, PHFetchResult<PHAsset>, RawAlbumRecord)] = []
+                        results.reserveCapacity(slice.count)
+                        for item in slice {
+                            let fetch = PHAsset.fetchAssets(in: item.collection, options: nil)
+                            let record = Self.makeRawAlbumRecord(
+                                id: item.id,
+                                title: item.title,
+                                assetsResult: fetch,
+                                photosByID: photosLookup
+                            )
+                            results.append((item.id, fetch, record))
+                        }
+                        return results
+                    }
+                }
+
+                var combined: [(String, PHFetchResult<PHAsset>, RawAlbumRecord)] = []
+                combined.reserveCapacity(collections.count)
+                for await part in group {
+                    combined.append(contentsOf: part)
+                }
+                return combined
+            }
+
+            for (id, fetch, record) in batchResults {
+                albumAssetResults[id] = fetch
+                albumsByID[id] = record
+                totalAlbumAssetLinks += record.assetIDs.count
+            }
+        }
+        let albumsDuration = ContinuousClock.now - albumsStart
+
+        let photos = photoOrder.compactMap { photosByID[$0] }
+        let albums = albumOrder.compactMap { albumsByID[$0] }
+        let snapshot = PhotoLibrarySnapshot(photos: photos, albums: albums)
+
+        let totalDuration = ContinuousClock.now - totalStart
+        Self.debugLog.debug(
+            "[Snapshot \(reason, privacy: .public)] total=\(Self.formatMs(totalDuration), privacy: .public) assets=\(photos.count, privacy: .public) (\(Self.formatMs(assetsDuration), privacy: .public)) albums=\(albums.count, privacy: .public) albumLinks=\(totalAlbumAssetLinks, privacy: .public) (\(Self.formatMs(albumsDuration), privacy: .public))"
+        )
+
+        return LoadedLibraryState(
+            assetsFetch: assetFetch,
+            albumsFetch: albumFetch,
+            albumAssetResults: albumAssetResults,
+            photosByID: photosByID,
+            photoOrder: photoOrder,
+            albumsByID: albumsByID,
+            albumOrder: albumOrder,
+            snapshot: snapshot
+        )
     }
 
     // MARK: - Album Mutations (Strictly Non-Destructive to Device Photos)
 
     func createAlbum(title: String, addingAssetIDs: [String]) async throws -> RawAlbumRecord {
+        let opStart = ContinuousClock.now
         let assets = fetchOrderedAssets(identifiers: addingAssetIDs)
         let createdLocalID = OSAllocatedUnfairLock<String?>(initialState: nil)
 
@@ -203,6 +569,10 @@ actor PhotoLibraryService: PhotoLibraryServing {
         let coverID = assets.first?.localIdentifier
         let latestDate = assets.compactMap(\.creationDate).max()
 
+        Self.debugLog.debug(
+            "[Service createAlbum] title=\(title, privacy: .public) count=\(assets.count, privacy: .public) in \(Self.formatMs(ContinuousClock.now - opStart), privacy: .public)"
+        )
+
         return RawAlbumRecord(
             id: albumID,
             title: title,
@@ -213,6 +583,7 @@ actor PhotoLibraryService: PhotoLibraryServing {
     }
 
     func addAssets(_ assetIDs: [String], toAlbum albumID: String) async throws -> AddAssetsResult {
+        let opStart = ContinuousClock.now
         guard let collection = fetchAlbumCollection(identifier: albumID) else {
             throw PhotoLibraryError.albumNotFound
         }
@@ -237,6 +608,10 @@ actor PhotoLibraryService: PhotoLibraryServing {
             request.addAssets(assetsToAdd as NSArray)
         }
 
+        Self.debugLog.debug(
+            "[Service addAssets] added=\(assetsToAdd.count, privacy: .public) skipped=\(skippedIDs.count, privacy: .public) in \(Self.formatMs(ContinuousClock.now - opStart), privacy: .public)"
+        )
+
         return AddAssetsResult(
             addedAssetIDs: assetsToAdd.map(\.localIdentifier),
             skippedAssetIDs: skippedIDs
@@ -244,9 +619,11 @@ actor PhotoLibraryService: PhotoLibraryServing {
     }
 
     func removeAssets(_ assetIDs: [String], fromAlbum albumID: String) async throws {
+        let opStart = ContinuousClock.now
         guard let collection = fetchAlbumCollection(identifier: albumID) else {
             throw PhotoLibraryError.albumNotFound
         }
+
         let assetsToRemove = fetchOrderedAssets(identifiers: assetIDs)
         guard !assetsToRemove.isEmpty else { return }
 
@@ -256,6 +633,10 @@ actor PhotoLibraryService: PhotoLibraryServing {
             }
             request.removeAssets(assetsToRemove as NSArray)
         }
+
+        Self.debugLog.debug(
+            "[Service removeAssets] removed=\(assetsToRemove.count, privacy: .public) in \(Self.formatMs(ContinuousClock.now - opStart), privacy: .public)"
+        )
     }
 
     func renameAlbum(_ albumID: String, to newTitle: String) async throws {
@@ -300,6 +681,9 @@ actor PhotoLibraryService: PhotoLibraryServing {
         do {
             try await PHPhotoLibrary.shared().performChanges(changes)
         } catch {
+            Self.debugLog.error(
+                "[PhotoKit] performChanges failed: \(error.localizedDescription, privacy: .public)"
+            )
             let nsError = error as NSError
             if nsError.domain == PHPhotosErrorDomain && nsError.code == PHPhotosError.userCancelled.rawValue {
                 throw PhotoLibraryError.userCancelled
