@@ -23,7 +23,8 @@ public enum PhotoLibraryError: Error, Equatable, LocalizedError, Sendable {
 public protocol PhotoLibraryServing: Sendable {
     func authorizationStatus() -> PhotoAuthorizationStatus
     func requestFullAuthorization() async -> PhotoAuthorizationStatus
-    func buildInitialIndex() async -> PhotoLibrarySnapshot
+    func buildInitialIndex(createdAfter cutoffDate: Date?) async -> PhotoLibrarySnapshot
+    func reloadPhotos(createdAfter cutoffDate: Date?) async -> PhotoLibrarySnapshot
     func libraryChanges() -> AsyncStream<PhotoLibrarySnapshot>
     func addAssets(_ assetIDs: [String], toAlbum albumID: String) async throws -> AddAssetsResult
     func createAlbum(title: String, addingAssetIDs: [String]) async throws -> RawAlbumRecord

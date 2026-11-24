@@ -8,12 +8,15 @@ import XCTest
 actor MockPhotoLibraryService: PhotoLibraryServing {
     private var status: PhotoAuthorizationStatus
     private var snapshot: PhotoLibrarySnapshot
+    private var activeCutoffDate: Date?
     private var nextCreatedIndex = 1
     private var changeContinuations: [UUID: AsyncStream<PhotoLibrarySnapshot>.Continuation] = [:]
     var shouldThrowCancelledOnDelete = false
     var createDelay: Duration = .zero
     private(set) var createdAlbumTitles: [String] = []
     private(set) var removedAssetsLog: [(albumID: String, assetIDs: [String])] = []
+    private(set) var initialIndexCutoffs: [Date?] = []
+    private(set) var reloadCutoffs: [Date?] = []
 
     init(
         status: PhotoAuthorizationStatus = .authorized,
@@ -33,8 +36,9 @@ actor MockPhotoLibraryService: PhotoLibraryServing {
 
     func emitLibraryChange(_ updatedSnapshot: PhotoLibrarySnapshot) {
         snapshot = updatedSnapshot
+        let filtered = filteredSnapshot(createdAfter: activeCutoffDate)
         for continuation in changeContinuations.values {
-            continuation.yield(updatedSnapshot)
+            continuation.yield(filtered)
         }
     }
 
@@ -46,8 +50,27 @@ actor MockPhotoLibraryService: PhotoLibraryServing {
         status
     }
 
-    func buildInitialIndex() async -> PhotoLibrarySnapshot {
-        snapshot
+    func buildInitialIndex(createdAfter cutoffDate: Date?) async -> PhotoLibrarySnapshot {
+        initialIndexCutoffs.append(cutoffDate)
+        activeCutoffDate = cutoffDate
+        return filteredSnapshot(createdAfter: cutoffDate)
+    }
+
+    func reloadPhotos(createdAfter cutoffDate: Date?) async -> PhotoLibrarySnapshot {
+        reloadCutoffs.append(cutoffDate)
+        activeCutoffDate = cutoffDate
+        return filteredSnapshot(createdAfter: cutoffDate)
+    }
+
+    private func filteredSnapshot(createdAfter cutoffDate: Date?) -> PhotoLibrarySnapshot {
+        guard let cutoffDate else {
+            return snapshot
+        }
+        let filteredPhotos = snapshot.photos.filter { photo in
+            guard let date = photo.creationDate else { return false }
+            return date >= cutoffDate
+        }
+        return PhotoLibrarySnapshot(photos: filteredPhotos, albums: snapshot.albums)
     }
 
     nonisolated func libraryChanges() -> AsyncStream<PhotoLibrarySnapshot> {
@@ -436,5 +459,70 @@ final class OrganizerViewModelTests: XCTestCase {
         XCTAssertEqual(vm.dataVersion, 2)
         XCTAssertEqual(vm.unassignedPhotoCount, 1)
         XCTAssertEqual(vm.flatVisiblePhotoIDs, ["p2"])
+    }
+
+    func testLimitToPastTwoMonthsDefaultAndFetchLevelReload() async {
+        let suiteName = "QuickAlbumTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let prefs = UserDefaultsPreferencesStore(defaults: defaults)
+        XCTAssertTrue(prefs.limitToPastTwoMonths)
+
+        let recent = RawPhotoRecord(id: "recent", creationDate: makeDate(2026, 11, 20, 10), isScreenshot: false, pixelWidth: 100, pixelHeight: 100)
+        let boundary = RawPhotoRecord(id: "boundary", creationDate: makeDate(2026, 9, 22, 0), isScreenshot: false, pixelWidth: 100, pixelHeight: 100)
+        let old = RawPhotoRecord(id: "old", creationDate: makeDate(2026, 9, 21, 23), isScreenshot: false, pixelWidth: 100, pixelHeight: 100)
+        let undated = RawPhotoRecord(id: "undated", creationDate: nil, isScreenshot: false, pixelWidth: 100, pixelHeight: 100)
+        let oldAlbum = RawAlbumRecord(id: "alb-old", title: "Old Trip", assetIDs: ["old"], coverAssetID: "old", latestAssetDate: makeDate(2026, 9, 21, 23))
+
+        let service = MockPhotoLibraryService(snapshot: PhotoLibrarySnapshot(
+            photos: [recent, boundary, old, undated],
+            albums: [oldAlbum]
+        ))
+
+        let vm = OrganizerViewModel(
+            service: service,
+            counterStore: InMemoryCounterHistoryStore(),
+            preferences: prefs,
+            calendar: utcCalendar,
+            nowProvider: { self.makeDate(2026, 11, 22, 18) }
+        )
+
+        XCTAssertTrue(vm.limitToPastTwoMonths)
+        await vm.loadLibrary()
+
+        let expectedCutoff = makeDate(2026, 9, 22, 0)
+        let initialCutoffs = await service.initialIndexCutoffs
+        XCTAssertEqual(initialCutoffs, [expectedCutoff])
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["recent", "boundary"])
+        XCTAssertEqual(vm.unassignedPhotoCount, 2)
+        // Older album photos remain inspectable in AlbumDetailSheet even when grid is filtered to 2 months
+        XCTAssertEqual(vm.photos(inAlbum: "alb-old").map(\.id), ["old"])
+
+        // Turning off reloads all photos (including older + undated) and persists preference
+        vm.limitToPastTwoMonths = false
+        await vm.waitForPendingReload()
+
+        let reloadCutoffsAfterDisable = await service.reloadCutoffs
+        XCTAssertEqual(reloadCutoffsAfterDisable, [nil])
+        XCTAssertFalse(prefs.limitToPastTwoMonths)
+        XCTAssertEqual(vm.unassignedPhotoCount, 3)
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["recent", "boundary", "undated"])
+
+        vm.membershipFilter = .all
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["recent", "boundary", "old", "undated"])
+
+        // Select old & undated photos, then re-enable filter -> hidden again and pruned from selection
+        vm.setSelection("old", selected: true)
+        vm.setSelection("undated", selected: true)
+        vm.setSelection("recent", selected: true)
+        vm.limitToPastTwoMonths = true
+        await vm.waitForPendingReload()
+
+        let reloadCutoffsAfterEnable = await service.reloadCutoffs
+        XCTAssertEqual(reloadCutoffsAfterEnable, [nil, expectedCutoff])
+        XCTAssertTrue(prefs.limitToPastTwoMonths)
+        XCTAssertEqual(vm.flatVisiblePhotoIDs, ["recent", "boundary"])
+        XCTAssertEqual(vm.selectedAssetIDs, ["recent"])
     }
 }

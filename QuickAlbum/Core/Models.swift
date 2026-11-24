@@ -305,6 +305,7 @@ public protocol UserPreferencesStoring: Sendable {
     var membershipScope: MembershipScope { get set }
     var sortOrder: SortOrder { get set }
     var hideScreenshots: Bool { get set }
+    var limitToPastTwoMonths: Bool { get set }
     var columnCount: Int { get set }
 }
 
@@ -317,6 +318,7 @@ public final class UserDefaultsPreferencesStore: UserPreferencesStoring, @unchec
         static let membershipScope = "QuickAlbum.Prefs.MembershipScope"
         static let sortOrder = "QuickAlbum.Prefs.SortOrder"
         static let hideScreenshots = "QuickAlbum.Prefs.HideScreenshots"
+        static let limitToPastTwoMonths = "QuickAlbum.Prefs.LimitToPastTwoMonths"
         static let columnCount = "QuickAlbum.Prefs.ColumnCount"
     }
 
@@ -388,6 +390,19 @@ public final class UserDefaultsPreferencesStore: UserPreferencesStoring, @unchec
         }
     }
 
+    public var limitToPastTwoMonths: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return (defaults.object(forKey: Keys.limitToPastTwoMonths) as? Bool) ?? true
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            defaults.set(newValue, forKey: Keys.limitToPastTwoMonths)
+        }
+    }
+
     public var columnCount: Int {
         get {
             lock.lock()
@@ -410,6 +425,7 @@ public final class InMemoryPreferencesStore: UserPreferencesStoring, @unchecked 
     private var _membershipScope: MembershipScope
     private var _sortOrder: SortOrder
     private var _hideScreenshots: Bool
+    private var _limitToPastTwoMonths: Bool
     private var _columnCount: Int
 
     public init(
@@ -417,12 +433,14 @@ public final class InMemoryPreferencesStore: UserPreferencesStoring, @unchecked 
         membershipScope: MembershipScope = .allUserAlbums,
         sortOrder: SortOrder = .newestFirst,
         hideScreenshots: Bool = false,
+        limitToPastTwoMonths: Bool = true,
         columnCount: Int = 4
     ) {
         self._pattern = pattern
         self._membershipScope = membershipScope
         self._sortOrder = sortOrder
         self._hideScreenshots = hideScreenshots
+        self._limitToPastTwoMonths = limitToPastTwoMonths
         self._columnCount = min(5, max(3, columnCount))
     }
 
@@ -444,6 +462,11 @@ public final class InMemoryPreferencesStore: UserPreferencesStoring, @unchecked 
     public var hideScreenshots: Bool {
         get { lock.withLock { _hideScreenshots } }
         set { lock.withLock { _hideScreenshots = newValue } }
+    }
+
+    public var limitToPastTwoMonths: Bool {
+        get { lock.withLock { _limitToPastTwoMonths } }
+        set { lock.withLock { _limitToPastTwoMonths = newValue } }
     }
 
     public var columnCount: Int {

@@ -10,6 +10,12 @@ private final class PhotoLibraryObserverProxy: NSObject, PHPhotoLibraryChangeObs
     }
 }
 
+private struct LoadedPhotosState: @unchecked Sendable {
+    let assetsFetch: PHFetchResult<PHAsset>
+    let photosByID: [String: RawPhotoRecord]
+    let photoOrder: [String]
+}
+
 private struct LoadedLibraryState: @unchecked Sendable {
     let assetsFetch: PHFetchResult<PHAsset>
     let albumsFetch: PHFetchResult<PHAssetCollection>
@@ -39,6 +45,7 @@ actor PhotoLibraryService: PhotoLibraryServing {
     private var cachedPhotoOrder: [String] = []
     private var cachedAlbumsByID: [String: RawAlbumRecord] = [:]
     private var cachedAlbumOrder: [String] = []
+    private var assetReloadGeneration: Int = 0
 
     deinit {
         if let proxy = observerProxy {
@@ -74,9 +81,14 @@ actor PhotoLibraryService: PhotoLibraryServing {
 
     // MARK: - Indexing & Change Observation
 
-    func buildInitialIndex() async -> PhotoLibrarySnapshot {
+    func buildInitialIndex(createdAfter cutoffDate: Date?) async -> PhotoLibrarySnapshot {
         registerObserverIfNeeded()
-        let loaded = await loadFullSnapshotOffActor(reason: "initialIndex")
+        assetReloadGeneration += 1
+        let generation = assetReloadGeneration
+        let loaded = await loadFullSnapshotOffActor(reason: "initialIndex", createdAfter: cutoffDate)
+        guard generation == assetReloadGeneration else {
+            return makeCurrentSnapshot()
+        }
         lastAssetsFetchResult = loaded.assetsFetch
         lastAlbumsFetchResult = loaded.albumsFetch
         lastAlbumAssetResults = loaded.albumAssetResults
@@ -85,6 +97,23 @@ actor PhotoLibraryService: PhotoLibraryServing {
         cachedAlbumsByID = loaded.albumsByID
         cachedAlbumOrder = loaded.albumOrder
         return loaded.snapshot
+    }
+
+    func reloadPhotos(createdAfter cutoffDate: Date?) async -> PhotoLibrarySnapshot {
+        guard lastAlbumsFetchResult != nil else {
+            return await buildInitialIndex(createdAfter: cutoffDate)
+        }
+        registerObserverIfNeeded()
+        assetReloadGeneration += 1
+        let generation = assetReloadGeneration
+        let loadedPhotos = await loadPhotosOffActor(reason: "reloadPhotos", createdAfter: cutoffDate)
+        guard generation == assetReloadGeneration else {
+            return makeCurrentSnapshot()
+        }
+        lastAssetsFetchResult = loadedPhotos.assetsFetch
+        cachedPhotosByID = loadedPhotos.photosByID
+        cachedPhotoOrder = loadedPhotos.photoOrder
+        return makeCurrentSnapshot()
     }
 
     nonisolated func libraryChanges() -> AsyncStream<PhotoLibrarySnapshot> {
@@ -441,11 +470,20 @@ actor PhotoLibraryService: PhotoLibraryServing {
         )
     }
 
-    private nonisolated func loadFullSnapshotOffActor(reason: String) async -> LoadedLibraryState {
-        let totalStart = ContinuousClock.now
+    private static func makeAssetFetchOptions(createdAfter cutoffDate: Date?) -> PHFetchOptions? {
+        guard let cutoffDate else { return nil }
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate >= %@", cutoffDate as NSDate)
+        return options
+    }
 
+    private nonisolated func loadPhotosOffActor(
+        reason: String,
+        createdAfter cutoffDate: Date?
+    ) async -> LoadedPhotosState {
         let assetsStart = ContinuousClock.now
-        let assetFetch = PHAsset.fetchAssets(with: .image, options: nil)
+        let options = Self.makeAssetFetchOptions(createdAfter: cutoffDate)
+        let assetFetch = PHAsset.fetchAssets(with: .image, options: options)
         var photosByID: [String: RawPhotoRecord] = [:]
         var photoOrder: [String] = []
         photosByID.reserveCapacity(assetFetch.count)
@@ -455,6 +493,28 @@ actor PhotoLibraryService: PhotoLibraryServing {
             photosByID[record.id] = record
             photoOrder.append(record.id)
         }
+        let assetsDuration = ContinuousClock.now - assetsStart
+        Self.debugLog.debug(
+            "[Photos \(reason, privacy: .public)] assets=\(photoOrder.count, privacy: .public) cutoff=\(cutoffDate?.description ?? "none", privacy: .public) in \(Self.formatMs(assetsDuration), privacy: .public)"
+        )
+        return LoadedPhotosState(
+            assetsFetch: assetFetch,
+            photosByID: photosByID,
+            photoOrder: photoOrder
+        )
+    }
+
+    private nonisolated func loadFullSnapshotOffActor(
+        reason: String,
+        createdAfter cutoffDate: Date?
+    ) async -> LoadedLibraryState {
+        let totalStart = ContinuousClock.now
+
+        let assetsStart = ContinuousClock.now
+        let loadedPhotos = await loadPhotosOffActor(reason: reason, createdAfter: cutoffDate)
+        let assetFetch = loadedPhotos.assetsFetch
+        let photosByID = loadedPhotos.photosByID
+        let photoOrder = loadedPhotos.photoOrder
         let assetsDuration = ContinuousClock.now - assetsStart
 
         let albumsStart = ContinuousClock.now

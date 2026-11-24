@@ -4,6 +4,12 @@ import os
 
 @MainActor
 final class ThumbnailLoader {
+    struct AssetMetadata: Sendable {
+        let creationDate: Date?
+        let pixelWidth: Int
+        let pixelHeight: Int
+    }
+
     static let shared = ThumbnailLoader()
 
     let gridImageManager = PHCachingImageManager()
@@ -11,6 +17,18 @@ final class ThumbnailLoader {
 
     init() {
         coverCache.countLimit = 400
+    }
+
+    func loadAssetMetadata(assetID: String) -> AssetMetadata? {
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil)
+        guard let asset = fetch.firstObject else {
+            return nil
+        }
+        return AssetMetadata(
+            creationDate: asset.creationDate,
+            pixelWidth: asset.pixelWidth,
+            pixelHeight: asset.pixelHeight
+        )
     }
 
     func cachedCover(for assetID: String) -> UIImage? {

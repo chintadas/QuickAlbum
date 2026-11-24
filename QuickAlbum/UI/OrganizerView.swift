@@ -159,6 +159,7 @@ struct OrganizerView: View {
                 }
 
                 Section("Filter") {
+                    Toggle("Past 2 Months Only", isOn: $viewModel.limitToPastTwoMonths)
                     Toggle("Hide Screenshots", isOn: $viewModel.hideScreenshots)
                 }
 
@@ -172,7 +173,7 @@ struct OrganizerView: View {
                     }
                 }
             } label: {
-                Image(systemName: viewModel.hideScreenshots ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                Image(systemName: (viewModel.hideScreenshots || viewModel.limitToPastTwoMonths) ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                     .font(.title3)
             }
             .accessibilityLabel("Grid filter and sort options")
@@ -224,16 +225,33 @@ struct OrganizerView: View {
                 ContentUnavailableView(
                     "All Caught Up",
                     systemImage: "checkmark.circle",
-                    description: Text("Every visible photo belongs to at least one album.")
+                    description: Text(
+                        viewModel.limitToPastTwoMonths
+                            ? "Every visible photo from the past 2 months belongs to at least one album."
+                            : "Every visible photo belongs to at least one album."
+                    )
                 )
             } else {
                 ContentUnavailableView(
                     "No Photos Found",
                     systemImage: "photo.on.rectangle.angled",
-                    description: Text(viewModel.hideScreenshots ? "Try turning off \"Hide Screenshots\" in the filter menu." : "No photos are available in your Photo Library.")
+                    description: Text(emptyAllPhotosDescription)
                 )
             }
         }
         .padding(.bottom, 140)
+    }
+
+    private var emptyAllPhotosDescription: String {
+        switch (viewModel.limitToPastTwoMonths, viewModel.hideScreenshots) {
+        case (true, true):
+            return "No non-screenshot photos from the past 2 months. Adjust filters in the filter menu to see older photos or screenshots."
+        case (true, false):
+            return "No photos taken in the past 2 months. Turn off \"Past 2 Months Only\" in the filter menu to view older photos."
+        case (false, true):
+            return "Try turning off \"Hide Screenshots\" in the filter menu."
+        case (false, false):
+            return "No photos are available in your Photo Library."
+        }
     }
 }

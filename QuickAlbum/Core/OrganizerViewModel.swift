@@ -45,6 +45,14 @@ public final class OrganizerViewModel {
             rebuildVisibleGrid()
         }
     }
+    public var limitToPastTwoMonths: Bool {
+        didSet {
+            guard limitToPastTwoMonths != oldValue else { return }
+            preferences.limitToPastTwoMonths = limitToPastTwoMonths
+            guard authorizationStatus == .authorized else { return }
+            schedulePhotoReloadForCurrentDateFilter()
+        }
+    }
     public var columnCount: Int {
         didSet {
             let clamped = min(5, max(3, columnCount))
@@ -88,6 +96,8 @@ public final class OrganizerViewModel {
     private var changesTask: Task<Void, Never>?
     private var pendingMutationTask: Task<Void, Never>?
     private var toastDismissTask: Task<Void, Never>?
+    private var photoReloadTask: Task<Void, Never>?
+    private var photoReloadGeneration: Int = 0
 
     // MARK: - Initialization
 
@@ -111,10 +121,17 @@ public final class OrganizerViewModel {
         self.membershipScope = preferences.membershipScope
         self.sortOrder = preferences.sortOrder
         self.hideScreenshots = preferences.hideScreenshots
+        self.limitToPastTwoMonths = preferences.limitToPastTwoMonths
         self.columnCount = preferences.columnCount
     }
 
     // MARK: - Computed Properties
+
+    public var assetCreationDateCutoff: Date? {
+        guard limitToPastTwoMonths else { return nil }
+        let todayStart = calendar.startOfDay(for: nowProvider())
+        return calendar.date(byAdding: .month, value: -2, to: todayStart)
+    }
 
     /// New albums are named after the date they are created (today), not the photos' capture dates.
     public var targetDate: Date {
@@ -194,7 +211,24 @@ public final class OrganizerViewModel {
 
     public func photos(inAlbum albumID: String) -> [PhotoItem] {
         let ids = albumIndex.assetIDs(inAlbum: albumID)
-        return ids.compactMap { photoItem(for: $0) }
+        return ids.map { id in
+            if let existing = photoItem(for: id) {
+                return existing
+            }
+            let count = albumIndex.countedAlbumCount(
+                for: id,
+                scope: membershipScope,
+                matchingAlbumIDs: matchingAlbumIDs
+            )
+            return PhotoItem(
+                id: id,
+                creationDate: nil,
+                isScreenshot: false,
+                countedAlbumCount: count,
+                pixelWidth: 0,
+                pixelHeight: 0
+            )
+        }
     }
 
     // MARK: - Lifecycle & Permissions
@@ -229,6 +263,10 @@ public final class OrganizerViewModel {
             startObservingLibraryChanges()
             await loadLibrary()
         } else if current != .authorized && previous == .authorized {
+            photoReloadTask?.cancel()
+            photoReloadTask = nil
+            photoReloadGeneration += 1
+            isLoading = false
             snapshot = .empty
             selectedAssetIDs.removeAll()
             recomputeAll()
@@ -236,10 +274,37 @@ public final class OrganizerViewModel {
     }
 
     public func loadLibrary() async {
+        photoReloadTask?.cancel()
+        photoReloadTask = nil
+        photoReloadGeneration += 1
+        let generation = photoReloadGeneration
+        let cutoff = assetCreationDateCutoff
+
         isLoading = true
-        let fetched = await service.buildInitialIndex()
+        let fetched = await service.buildInitialIndex(createdAfter: cutoff)
+        guard generation == photoReloadGeneration else { return }
         applySnapshot(fetched)
         isLoading = false
+    }
+
+    public func waitForPendingReload() async {
+        await photoReloadTask?.value
+    }
+
+    private func schedulePhotoReloadForCurrentDateFilter() {
+        photoReloadTask?.cancel()
+        photoReloadGeneration += 1
+        let generation = photoReloadGeneration
+        let cutoff = assetCreationDateCutoff
+        isLoading = true
+
+        photoReloadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let fetched = await self.service.reloadPhotos(createdAfter: cutoff)
+            guard !Task.isCancelled, generation == self.photoReloadGeneration else { return }
+            self.applySnapshot(fetched)
+            self.isLoading = false
+        }
     }
 
     private func startObservingLibraryChanges() {
@@ -438,9 +503,7 @@ public final class OrganizerViewModel {
                 let updatedAlbums = self.snapshot.albums.map { record -> RawAlbumRecord in
                     guard record.id == albumID else { return record }
                     let combined = record.assetIDs + actuallyAdded.filter { !existingInAlbum.contains($0) }
-                    let latestDate = combined
-                        .compactMap { self.rawPhotosByID[$0]?.creationDate }
-                        .max() ?? record.latestAssetDate
+                    let latestDate = (combined.compactMap { self.rawPhotosByID[$0]?.creationDate } + (record.latestAssetDate.map { [$0] } ?? [])).max()
                     return RawAlbumRecord(
                         id: record.id,
                         title: record.title,
@@ -526,12 +589,14 @@ public final class OrganizerViewModel {
                     let updatedAlbums = self.snapshot.albums.map { record -> RawAlbumRecord in
                         guard record.id == toast.albumID else { return record }
                         let remainingIDs = record.assetIDs.filter { !removeSet.contains($0) }
+                        let latestDate = remainingIDs.compactMap { self.rawPhotosByID[$0]?.creationDate }.max()
+                            ?? (remainingIDs.isEmpty ? nil : record.latestAssetDate)
                         return RawAlbumRecord(
                             id: record.id,
                             title: record.title,
                             assetIDs: remainingIDs,
                             coverAssetID: remainingIDs.first,
-                            latestAssetDate: remainingIDs.compactMap { self.rawPhotosByID[$0]?.creationDate }.max()
+                            latestAssetDate: latestDate
                         )
                     }
                     self.applySnapshot(PhotoLibrarySnapshot(photos: self.snapshot.photos, albums: updatedAlbums))
@@ -563,12 +628,14 @@ public final class OrganizerViewModel {
                 let updatedAlbums = self.snapshot.albums.map { record -> RawAlbumRecord in
                     guard record.id == albumID else { return record }
                     let remainingIDs = record.assetIDs.filter { !removeSet.contains($0) }
+                    let latestDate = remainingIDs.compactMap { self.rawPhotosByID[$0]?.creationDate }.max()
+                        ?? (remainingIDs.isEmpty ? nil : record.latestAssetDate)
                     return RawAlbumRecord(
                         id: record.id,
                         title: record.title,
                         assetIDs: remainingIDs,
                         coverAssetID: remainingIDs.first,
-                        latestAssetDate: remainingIDs.compactMap { self.rawPhotosByID[$0]?.creationDate }.max()
+                        latestAssetDate: latestDate
                     )
                 }
                 self.applySnapshot(PhotoLibrarySnapshot(photos: self.snapshot.photos, albums: updatedAlbums))

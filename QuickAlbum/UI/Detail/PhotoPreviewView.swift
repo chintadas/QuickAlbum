@@ -9,6 +9,7 @@ struct PhotoPreviewView: View {
 
     @State private var currentAssetID: String
     @State private var showAddToAlbumSheet = false
+    @State private var fallbackMetadata: ThumbnailLoader.AssetMetadata?
 
     private let metadataDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -37,6 +38,24 @@ struct PhotoPreviewView: View {
 
     private var currentItem: PhotoItem? {
         viewModel.photoItem(for: currentAssetID)
+    }
+
+    private var displayedCreationDate: Date? {
+        currentItem?.creationDate ?? fallbackMetadata?.creationDate
+    }
+
+    private var displayedPixelWidth: Int {
+        if let currentItem, currentItem.pixelWidth > 0 {
+            return currentItem.pixelWidth
+        }
+        return fallbackMetadata?.pixelWidth ?? 0
+    }
+
+    private var displayedPixelHeight: Int {
+        if let currentItem, currentItem.pixelHeight > 0 {
+            return currentItem.pixelHeight
+        }
+        return fallbackMetadata?.pixelHeight ?? 0
     }
 
     private var currentAlbums: [AlbumSummary] {
@@ -74,7 +93,7 @@ struct PhotoPreviewView: View {
 
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
-                        if let date = currentItem?.creationDate {
+                        if let date = displayedCreationDate {
                             Text(metadataDateFormatter.string(from: date))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
@@ -83,8 +102,8 @@ struct PhotoPreviewView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white)
                         }
-                        if let item = currentItem, item.pixelWidth > 0 {
-                            Text("\(item.pixelWidth) × \(item.pixelHeight)")
+                        if displayedPixelWidth > 0 {
+                            Text("\(displayedPixelWidth) × \(displayedPixelHeight)")
                                 .font(.caption2)
                                 .monospacedDigit()
                                 .foregroundStyle(.white.opacity(0.75))
@@ -116,6 +135,11 @@ struct PhotoPreviewView: View {
                     viewModel: viewModel,
                     assetID: currentAssetID
                 )
+            }
+            .task(id: currentAssetID) {
+                fallbackMetadata = currentItem == nil
+                    ? ThumbnailLoader.shared.loadAssetMetadata(assetID: currentAssetID)
+                    : nil
             }
         }
     }
