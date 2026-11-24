@@ -22,9 +22,6 @@ struct OrganizerView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 topControlsBar
-                if !viewModel.selectedAssetIDs.isEmpty {
-                    selectionContextBar
-                }
                 Divider()
 
                 ZStack {
@@ -189,34 +186,6 @@ struct OrganizerView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(.systemBackground))
-    }
-
-    private var selectionContextBar: some View {
-        HStack(spacing: 12) {
-            Text("\(viewModel.selectedAssetIDs.count) selected")
-                .font(.subheadline.weight(.semibold))
-                .monospacedDigit()
-
-            Text("•  \(viewModel.targetDatePrefix)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button("Select All") {
-                viewModel.selectAllVisible()
-            }
-            .font(.subheadline)
-
-            Button("Clear") {
-                viewModel.clearSelection()
-            }
-            .font(.subheadline.weight(.semibold))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(Color.accentColor.opacity(0.08))
-        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private var emptyGridState: some View {

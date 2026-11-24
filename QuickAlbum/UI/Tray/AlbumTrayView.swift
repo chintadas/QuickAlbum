@@ -190,12 +190,37 @@ struct AlbumTrayView: View {
     }
 
     private var trayHeader: some View {
-        HStack {
-            Spacer()
+        ZStack {
             Capsule()
                 .fill(Color.secondary.opacity(0.4))
                 .frame(width: 36, height: 4)
-            Spacer()
+                .opacity(viewModel.selectedAssetIDs.isEmpty ? 1 : 0)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)
+        .overlay(alignment: .leading) {
+            if !viewModel.selectedAssetIDs.isEmpty {
+                HStack(spacing: 8) {
+                    Text("\(viewModel.selectedAssetIDs.count) selected")
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Button("Clear") {
+                        viewModel.clearSelection()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear selection")
+                }
+                .padding(.leading, 12)
+                .transition(.opacity)
+            }
         }
         .overlay(alignment: .trailing) {
             Button {
@@ -213,8 +238,8 @@ struct AlbumTrayView: View {
             }
             .accessibilityLabel("Expand album drawer")
         }
-        .padding(.top, 7)
-        .padding(.bottom, 2)
+        .padding(.top, 4)
+        .animation(.easeInOut(duration: 0.15), value: viewModel.selectedAssetIDs.isEmpty)
     }
 
     /// Resolves dropped asset IDs. In-app drags read the IDs straight from the view model
